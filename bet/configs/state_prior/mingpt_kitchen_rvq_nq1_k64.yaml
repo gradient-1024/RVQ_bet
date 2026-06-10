@@ -1,0 +1,31 @@
+_target_: models.latent_generators.mingpt.MinGPT
+
+discrete_input: false
+input_dim: ${encoder.output_dim}
+
+vocab_size: ???  # TBD by the discretization model.
+
+# Architecture details: match the existing low-dimensional Kitchen benchmark.
+n_layer: 6
+n_head: 6
+n_embd: 120
+
+block_size: ${window_size}  # Length of history/context
+predict_offsets: True
+offset_loss_scale: 1000.0
+focal_loss_gamma: 2.0
+action_dim: ${env.action_dim}
+
+# RVQ heads: one code head with code-independent action offsets.
+rvq_num_quantizers: 1
+offset_mode: code_independent
+code_independent_offsets: True
+offset_mode_tag: code_independent_offset
+rvq_sampling_strategy: argmax
+rvq_sampling_temperature: 1.0
+rvq_head_hidden_dim: 256
+rvq_head_depth: 1
+rvq_offset_head_hidden_dim: 256
+rvq_offset_head_depth: 1
+code_loss_weights:
+  - 1.0
