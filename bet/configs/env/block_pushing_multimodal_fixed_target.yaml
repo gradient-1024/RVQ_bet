@@ -1,0 +1,15 @@
+name: BlockPushMultimodal-v0
+obs_dim: 16
+action_dim: 2
+action_min: null
+action_max: null
+
+load_dir: "/home/nullptr/projects/bet/bet/exp_local/2026.05.20/234038_blockpush_train"
+
+workspace:
+  _target_: workspaces.block_push.BlockPushWorkspace
+
+dataset_fn:
+  _target_: dataloaders.trajectory_loader.get_push_train_val
+  data_directory: ${env_vars.datasets.multimodal_push_fixed_target}
+  window_size: ${window_size}

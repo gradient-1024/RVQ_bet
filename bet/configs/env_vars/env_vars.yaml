@@ -1,0 +1,4 @@
+datasets:
+  carla_multipath_town04_merge: ${oc.env:PWD}/../../datasets/carla_dataset
+  relay_kitchen: ${oc.env:PWD}/../../datasets/bet_data_release/kitchen
+  multimodal_push_fixed_target: ${oc.env:PWD}/../../bet/datasets/extracted/bet_data_release/blockpush
