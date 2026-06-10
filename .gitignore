@@ -1,0 +1,52 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+/env/
+
+# Local editor / OS files
+.idea/
+.vscode/
+.DS_Store
+*:Zone.Identifier
+.codex
+.codex/
+
+# Experiment outputs
+bet/exp/
+bet/exp_local/
+bet/wandb/
+wandb/
+
+# Model checkpoints and rollout artifacts
+*.pt
+*.pth
+*.ckpt
+actions_*.pth
+latents_*.pth
+
+# Logs
+*.log
+
+# Local datasets and external checkouts
+datasets/
+bet/datasets/
+relay-policy-learning/
+D4RL/
+
+# Large media / generated artifacts
+*.mp4
+*.avi
+*.mov
+*.gif
+
+# Local machine config
+.env
+.env.*
