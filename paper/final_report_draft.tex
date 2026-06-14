@@ -1,0 +1,236 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{times}
+\usepackage[numbers]{natbib}
+\usepackage[bookmarks=true]{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\pdfinfo{
+   /Author (Sirui Song and Zhongyu You)
+   /Title  (Stabilizing Residual Vector-Quantized Behavior Transformers for Multi-Modal Imitation Learning)
+   /Subject (Final Report)
+   /Keywords (Behavior Cloning; Behavior Transformer; VQ-BeT; Residual Vector Quantization; BlockPush; Franka Kitchen)
+}
+
+\title{Stabilizing Residual Vector-Quantized Behavior Transformers for Multi-Modal Imitation Learning}
+
+\author{
+    Sirui Song$^*$ \\
+    524531910037
+    \and
+    Zhongyu You$^*$ \\
+    524531910039
+    \\[2ex]
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Behavior Transformer (BeT) handles multi-modal behavior cloning by discretizing continuous actions with $k$-means and predicting a discrete action bin together with a continuous offset. This project studies whether the fixed $k$-means action tokenizer can be replaced by a learned residual vector-quantized (RVQ) tokenizer while keeping the transformer policy backbone unchanged. In the midterm stage, early RVQ variants failed mainly because of code collapse: most actions were mapped to one code, so the policy relied on offsets instead of meaningful discrete structure. We therefore introduced residual $k$-means initialization, dead-code restart, code-usage diagnostics, and several offset-conditioning variants. On BlockPush, these changes raised RVQ performance from collapse-stage rewards around $0.16/0.17$ to the $0.76$--$0.81$ range, although the $k$-means baseline remained strongest. In the final stage, we extended evaluation to Franka Kitchen. The best Kitchen model, two-level RVQ with code-embedding-conditioned offsets, reached $3.05 \pm 0.96$ average reward over 100 episodes, compared with $2.92 \pm 1.15$ for the $k$-means baseline. These results suggest that learned hierarchical tokenization may be more useful in higher-dimensional manipulation tasks, but the improvement remains marginal relative to variance and requires stronger validation.
+\end{abstract}
+
+\section{Problem Statement and Motivation}
+
+Behavior cloning for robotic manipulation is challenging because demonstrations are often multi-modal. The same observation history may admit several valid action sequences: a robot may choose different object orders, approach from different directions, or make different local contacts while still solving the task. A standard regression policy trained with mean-squared error tends to average across these modes, and the average of several valid actions may itself be invalid. This is the central motivation for latent-action behavior cloning methods.
+
+Behavior Transformer (BeT) addresses this issue by first clustering continuous actions with $k$-means and then training a transformer policy to predict both a discrete action bin and a continuous residual offset \cite{shafiullah2022bet}. This formulation is attractive because the discrete bin can represent coarse action modes, while the offset restores continuous precision. However, the quality of the learned policy depends on the quality of the fixed action tokenizer. If the action distribution has hierarchical structure or task-dependent fine variation, fixed $k$-means centers may not provide the best latent action space.
+
+Our project asks whether this fixed tokenizer can be replaced by a learned residual vector-quantized (RVQ) tokenizer inspired by VQ-BeT \cite{lee2024vqbet}. We do not attempt a full reproduction of VQ-BeT. Instead, we perform a controlled adaptation inside the BeT framework: the GPT-like transformer backbone is preserved, and the main changes are restricted to the action tokenizer, code prediction heads, and offset prediction pathway. This makes the comparison focused: if performance changes, it is mainly due to the latent action interface rather than a different policy architecture.
+
+This controlled setting also makes negative results informative. If RVQ underperforms, the reason is unlikely to be a weaker sequence model, since the transformer is shared. Instead, the failure must come from the learned tokenizer, the policy's ability to predict discrete codes, or the way the decoded action center is combined with continuous offsets. This is why our analysis emphasizes not only rollout reward, but also code usage and offset-conditioning design.
+
+The project developed in two stages. In the midterm stage, the main task was to obtain a stable RVQ implementation on BlockPush. Early experiments produced rewards around $0.16/0.17$, substantially below the $k$-means baseline. Diagnostics showed that this was not simply a policy learning problem: the tokenizer itself had collapsed, mapping almost all actions to one code. In the final stage, after stabilizing the tokenizer, we extended evaluation to Franka Kitchen, a higher-dimensional environment with multiple subtasks, to test whether learned tokenization becomes more useful when the action distribution is richer.
+
+\section{Related Work}
+
+BeT formulates multi-modal imitation learning as discrete-bin prediction plus continuous offset regression \cite{shafiullah2022bet}. Its key advantage is that it converts continuous multi-modal action prediction into a classification problem over action clusters, while preserving precision through offsets. VQ-BeT extends this idea by learning latent actions with vector quantization rather than fixing them with $k$-means \cite{lee2024vqbet}. Our work is inspired by this direction, but focuses on a smaller controlled question: can an RVQ action tokenizer replace BeT's $k$-means discretizer while leaving the transformer backbone fixed?
+
+Other approaches to multi-modal imitation learning include Implicit Behavioral Cloning (IBC), which models action distributions with an energy-based objective \cite{florence2022implicit}, and Diffusion Policy, which generates actions through iterative denoising \cite{chi2023diffusion}. These methods demonstrate the value of expressive action distributions, but they also use different inference or modeling assumptions. In contrast, our study keeps the BeT-style feed-forward policy and asks whether improving the discrete latent action interface alone can improve imitation quality.
+
+BlockPush and Kitchen play different roles in the evaluation. BlockPush is useful for debugging because the task is simple enough that tokenizer collapse and rollout failure can be inspected directly, while still containing genuine multi-modality. Kitchen is a stronger test of the final hypothesis because its 9-dimensional action space and multiple subtasks create more room for hierarchical latent actions to matter. We therefore use BlockPush mainly to understand and stabilize the method, and Kitchen to test whether the stabilized method becomes more useful in a richer environment.
+
+\section{Method}
+
+\subsection{Baseline and RVQ Tokenizer}
+
+The BeT baseline represents an action as
+\begin{equation}
+\hat{a}_t = A_{c_t} + \Delta a_t,
+\end{equation}
+where $A_{c_t}$ is the selected $k$-means center and $\Delta a_t$ is a predicted offset. In our controlled setting, the transformer backbone is kept unchanged. We use $K{=}16$ for BlockPush and $K{=}64$ for Kitchen, following the available configurations and the larger Kitchen action space.
+
+For RVQ, an action is encoded as $x_t=f_{\mathrm{enc}}(a_t)$. For $N_q{=}1$, one codebook maps $x_t$ to a discrete code. For $N_q{=}2$, quantization is residual:
+\begin{align}
+ z_t^{(1)} &= \arg\min_k \|x_t-e_k^{(1)}\|_2^2, \\
+ r_t^{(1)} &= x_t-e_{z_t^{(1)}}^{(1)}, \\
+ z_t^{(2)} &= \arg\min_k \|r_t^{(1)}-e_k^{(2)}\|_2^2.
+\end{align}
+The quantized latent is $q_t=\sum_i e_{z_t^{(i)}}^{(i)}$, and the decoder reconstructs an action center $\hat{a}^{\mathrm{center}}_t=f_{\mathrm{dec}}(q_t)$. The policy then predicts
+\begin{equation}
+\hat{a}_t = \hat{a}^{\mathrm{center}}_t + \hat{o}_t.
+\end{equation}
+For $N_q{=}2$, the policy predicts two code levels with loss $L_{\mathrm{code}}=L_1+\beta L_2$. The offset target is defined relative to the decoded RVQ center, so the offset head learns local correction rather than reconstructing the full action independently. This distinction is important: if the offset is allowed to explain all action variation, the model may ignore the discrete code even when the tokenizer itself is non-collapsed. A useful RVQ-BeT policy should therefore make the decoded center carry the coarse action structure and use the offset only for continuous refinement.
+
+\subsection{Stabilizing RVQ}
+
+The first RVQ versions failed because the learned codebooks collapsed. Once most actions share the same code, the discrete latent no longer represents action modes, and the offset head is forced to explain almost all action variation. This failure mode is especially problematic because the training loss may still decrease while the learned representation contributes little to downstream control.
+
+We introduced three stabilization mechanisms. First, RVQ codebooks are initialized with residual $k$-means instead of random vectors. For $N_q{=}1$, $k$-means is applied to encoder latents. For $N_q{=}2$, the first codebook is initialized on latents and the second on first-stage residuals. Second, dead-code restart reinitializes unused or rarely used codes with high-error samples; for the second codebook, restart candidates are drawn from residual space. Third, tokenizer diagnostics track active code count, perplexity, maximum usage ratio, and reconstruction error, making collapse visible before rollout evaluation.
+
+\subsection{Offset-Conditioning Variants}
+
+After collapse was mitigated, offset design became the key experimental variable. Table~\ref{tab:offset_variants} summarizes the tested variants. The code-independent variant predicts one offset from the transformer hidden state. The code-dependent variant for $N_q{=}1$ selects an offset branch by code, following the original BeT intuition that each action mode may need a different local correction. For $N_q{=}2$, primary-dependent offset selection uses only the first code to avoid a full $K^2$ branch structure. Code-embedding-conditioned offset prediction instead concatenates the selected RVQ embeddings with the hidden state, allowing the offset MLP to use both quantization levels.
+
+\begin{table}[t]
+\centering
+\caption{Offset-conditioning variants.}
+\label{tab:offset_variants}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lll}
+\toprule
+Variant & RVQ depth & Offset conditioning \\
+\midrule
+Code-independent & $N_q=1,2$ & Hidden state only \\
+Code-dependent & $N_q=1$ & Branch selected by code \\
+Primary-dependent & $N_q=2$ & Branch selected by first code \\
+Code-embedding-conditioned & $N_q=2$ & Hidden state plus selected code embeddings \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\section{Experiments and Results}
+
+\subsection{BlockPush Midterm Experiments}
+
+BlockPush is the main midterm environment. It is low-dimensional but multi-modal: different block orders and contact strategies can solve the task. Evaluation uses \texttt{window\_size=5}, \texttt{num\_eval\_eps=120}, and argmax latent selection. Table~\ref{tab:blockpush_results} shows that stabilization made RVQ a meaningful competitor, but the $k$-means baseline remained strongest.
+
+\begin{table}[t]
+\centering
+\caption{BlockPush evaluation results.}
+\label{tab:blockpush_results}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcc}
+\toprule
+Configuration & Avg. Reward & Success$_{\ge 0.99}$ \\
+\midrule
+BeT + $k$-means ($K{=}16$) & 0.8647 & 92/120 \\
+RVQ $N_q{=}1$ code-independent & 0.7676 & 73/120 \\
+RVQ $N_q{=}1$ code-dependent & 0.8177 & 80/120 \\
+RVQ $N_q{=}2$ primary-dependent & 0.7592 & 73/120 \\
+RVQ $N_q{=}2$ code-embedding-conditioned & 0.8142 & 83/120 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+The reward improvement over the collapse-stage implementation is substantial. Instead of failing near $0.16/0.17$, stabilized RVQ variants reach the $0.76$--$0.81$ range. The best RVQ models are the $N_q{=}1$ code-dependent and $N_q{=}2$ code-embedding-conditioned variants, suggesting that the offset pathway must be coupled with the selected code. However, none of the RVQ variants clearly exceeds the $k$-means baseline, which suggests that BlockPush may already be well represented by 16 fixed clusters.
+
+Tokenizer diagnostics support this interpretation. Table~\ref{tab:diagnostics} shows that the stabilized BlockPush tokenizers keep all codes active and avoid near-one-code collapse. The second codebook in $N_q{=}2$ is somewhat less uniform than the first, but it still uses all codes with reasonable perplexity. Therefore, the remaining performance gap is not caused by catastrophic collapse alone; it is more likely related to code prediction difficulty and offset usage.
+
+\begin{table}[t]
+\centering
+\caption{BlockPush tokenizer diagnostics.}
+\label{tab:diagnostics}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llcccc}
+\toprule
+Variant & Layer & Active & PPL & MaxRatio & Center L1 \\
+\midrule
+K-means & q0 & 16/16 & 13.41 & 0.1261 & 0.002004 \\
+RVQ $N_q{=}1$ & q0 & 16/16 & 14.48 & 0.1121 & 0.001895 \\
+RVQ $N_q{=}2$ PD & q0 & 16/16 & 13.98 & 0.1110 & 0.000726 \\
+RVQ $N_q{=}2$ PD & q1 & 16/16 & 11.18 & 0.1880 & 0.000726 \\
+RVQ $N_q{=}2$ CEC & q0 & 16/16 & 14.78 & 0.0996 & 0.000682 \\
+RVQ $N_q{=}2$ CEC & q1 & 16/16 & 12.08 & 0.1594 & 0.000682 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Franka Kitchen Final Experiments}
+
+In the final stage, we evaluate on state-based Franka Kitchen \texttt{kitchen-all-v0}, with observation dimension 60 and action dimension 9. Kitchen contains multiple subtasks and a richer action distribution than BlockPush. We evaluate the $K{=}64$ $k$-means baseline and five RVQ variants over 100 episodes with 700 maximum steps per episode. Table~\ref{tab:kitchen_results} reports average total reward and standard deviation.
+
+\begin{table}[t]
+\centering
+\caption{Franka Kitchen evaluation over 100 episodes.}
+\label{tab:kitchen_results}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcc}
+\toprule
+Configuration & Avg. Reward & Std. \\
+\midrule
+BeT + $k$-means ($K{=}64$) & 2.92 & 1.1548 \\
+RVQ $N_q{=}1$ code-independent & 2.00 & 1.4353 \\
+RVQ $N_q{=}1$ code-dependent & 3.00 & 1.1314 \\
+RVQ $N_q{=}2$ code-independent & 1.59 & 1.1755 \\
+RVQ $N_q{=}2$ primary-dependent & 1.78 & 1.2213 \\
+RVQ $N_q{=}2$ code-embedding-conditioned & 3.05 & 0.9631 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Kitchen shows a more encouraging pattern. The best model is $N_q{=}2$ code-embedding-conditioned RVQ, slightly above the $k$-means baseline; $N_q{=}1$ code-dependent RVQ is also comparable. In contrast, both code-independent variants are much worse. This reinforces the conclusion from BlockPush that the offset cannot be treated as a generic regressor independent of the selected discrete code. It must use the latent action information to produce mode-specific continuous refinement.
+
+The Kitchen result also changes how we interpret $N_q{=}2$. In BlockPush, adding a second code level did not clearly help and may have increased code prediction difficulty. In Kitchen, the two-level code-embedding-conditioned model performs best. This suggests that hierarchical tokenization can be useful when the environment has enough action complexity, but only if the policy uses both code levels effectively. Primary-dependent offsets, which ignore the second code during offset selection, do not realize this benefit.
+
+At the same time, the improvement is small. The best RVQ model exceeds the baseline by only $0.13$ average reward, while the standard deviations are close to or above 1.0. Thus, the Kitchen result should be interpreted as evidence of competitiveness and potential benefit, not conclusive superiority over $k$-means. Since Kitchen reward counts completed subtasks, two policies with similar average reward may still behave differently: one may reliably complete a small set of subtasks, while another may sometimes complete more difficult combinations but fail more often. This makes subtask-level analysis especially important for understanding whether RVQ changes the qualitative behavior of the policy.
+
+\section{Discussion}
+
+The project produced three main findings. First, the main initial failure mode of RVQ-BeT was code collapse, not the transformer backbone. This is important because it changes the engineering target: before comparing learned and fixed tokenizers, the learned tokenizer must be verified to use its codebook. Residual $k$-means initialization, dead-code restart, and usage diagnostics made RVQ trainable enough for meaningful comparison.
+
+Second, offset conditioning is central. Across both environments, code-independent offsets are less effective than code-conditioned alternatives. The stronger variants either select offset branches by code or condition the offset MLP on selected code embeddings. This indicates that the discrete token and continuous residual should not be viewed as independent prediction problems. The discrete code defines a local action region, and the offset should refine the action within that region.
+
+Third, environment complexity matters. On BlockPush, fixed $k$-means remains difficult to beat, possibly because the low-dimensional action space is already well covered by a small number of clusters. On Kitchen, which has higher-dimensional actions and multiple subtasks, code-conditioned RVQ becomes competitive and slightly better on average. This supports the hypothesis that learned hierarchical tokenization may become more valuable as the action distribution becomes richer.
+
+\section{Limitations and Future Work}
+
+The main limitation is statistical strength. Most results use one training seed and one checkpoint per variant. Because Kitchen reward variance is large, the small improvement of RVQ over $k$-means cannot be treated as statistically significant. Future work should run multi-seed evaluation for the $k$-means baseline, $N_q{=}1$ code-dependent RVQ, and $N_q{=}2$ code-embedding-conditioned RVQ.
+
+A second limitation is diagnostic coverage. BlockPush includes code usage, perplexity, maximum usage ratio, and reconstruction diagnostics, but Kitchen currently reports rollout reward only. The same diagnostics should be extended to Kitchen. For $N_q{=}2$, first-code accuracy, second-code accuracy, joint code accuracy, and predicted-code reconstruction error are especially important, because secondary-code prediction may be a bottleneck.
+
+Finally, reward alone does not explain behavior. Future evaluation should include reward histograms and subtask-level completion rates, showing how often each policy completes zero, one, two, three, or more Kitchen subtasks and which subtasks improve. Better two-level RVQ training strategies, including secondary-code loss reweighting, code-pair validity masks, scheduled sampling, and predicted-code reconstruction losses, are also promising directions. Broader tests on CARLA or image-based observations would further clarify whether the Kitchen trend generalizes.
+
+\section{Conclusion}
+
+This project shows that RVQ action tokenization can be integrated into BeT, but only after addressing code collapse and carefully designing the offset pathway. On BlockPush, stabilized RVQ approaches but does not surpass the $k$-means baseline. On Franka Kitchen, code-conditioned RVQ variants achieve comparable or slightly better reward, with the best result from two-level code-embedding-conditioned RVQ. These results suggest that learned hierarchical tokenization may become more useful as manipulation tasks become higher-dimensional and more structured. Nevertheless, the current gains are small relative to rollout variance, so stronger evidence from multi-seed evaluation, Kitchen diagnostics, and subtask-level analysis is needed before claiming a robust advantage over fixed $k$-means tokenization.
+
+\section{Author Contributions}
+
+This section will be finalized before submission. It will describe each team member's responsibilities in sufficient detail for individual evaluation, including contributions to system design, algorithm implementation, experiment design and execution, data collection and analysis, and report writing and editing. Specific percentage allocations are intentionally left as placeholders at this stage.
+
+\paragraph{Sirui Song.}
+Placeholder for contributions to system design, RVQ/BeT implementation, experiment setup, result analysis, and report writing/editing.
+
+\paragraph{Zhongyu You.}
+Placeholder for contributions to system design, RVQ/BeT implementation, experiment setup, result analysis, and report writing/editing.
+
+\section{References}
+
+\begin{thebibliography}{99}
+
+\bibitem{shafiullah2022bet}
+Nur Muhammad (Mahi) Shafiullah, Zichen Jeff Cui, Ariuntuya Altanzaya, and Lerrel Pinto.
+\newblock Behavior Transformers: Cloning $k$ Modes with One Stone.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2022.
+
+\bibitem{lee2024vqbet}
+Seungjae Lee, Yibin Wang, Haritheja Etukuru, H. Jin Kim, Nur Muhammad Mahi Shafiullah, and Lerrel Pinto.
+\newblock Behavior Generation with Latent Actions.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine Learning (ICML)}, 2024.
+
+\bibitem{florence2022implicit}
+Pete Florence, Corey Lynch, Andy Zeng, Oscar Ramirez, Ayzaan Wahid, Laura Downs, Adrian Wong, Johnny Lee, Igor Mordatch, and Jonathan Tompson.
+\newblock Implicit Behavioral Cloning.
+\newblock In \emph{Conference on Robot Learning (CoRL)}, 2022.
+
+\bibitem{chi2023diffusion}
+Cheng Chi, Zhenjia Xu, Siyuan Feng, Yilun Du, Zhenjia Li, Junjiedeng, Sicun Gao, Tingnan Zhang, and Chelsea Finn.
+\newblock Diffusion Policy: Visuomotor Policy Learning via Action Diffusion.
+\newblock In \emph{Robotics: Science and Systems (RSS)}, 2023.
+
+\end{thebibliography}
+
+\end{document}
