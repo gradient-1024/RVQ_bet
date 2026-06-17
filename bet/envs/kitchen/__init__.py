@@ -116,7 +116,28 @@ class KitchenBase(KitchenTaskRelaxV1):
         return reward_dict, score
 
     def step(self, a, b=None):
-        obs, reward, done, env_info = super(KitchenBase, self).step(a, b=b)
+        a = np.clip(a, -1.0, 1.0)
+
+        if not self.initializing:
+            a = self.act_mid + a * self.act_amp
+        else:
+            self.goal = self._get_task_goal()
+
+        self.robot.step(self, a, step_duration=self.skip * self.model.opt.timestep)
+
+        obs = self._get_obs()
+        reward_dict, score = self._get_reward_n_score(self.obs_dict)
+        reward = reward_dict["r_total"]
+        done = False
+        env_info = {
+            "time": self.obs_dict["t"],
+            "obs_dict": self.obs_dict,
+            "rewards": reward_dict,
+            "score": score,
+        }
+        if os.environ.get("BET_KITCHEN_STEP_IMAGES") == "1":
+            env_info["images"] = np.asarray(self.render(mode="rgb_array"))
+
         if self.TERMINATE_ON_TASK_COMPLETE:
             done = not self.tasks_to_complete
         if self.TERMINATE_ON_WRONG_COMPLETE:
